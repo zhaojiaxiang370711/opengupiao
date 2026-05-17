@@ -1,0 +1,66 @@
+:root {
+  --neu-bg: #e8ecf1;
+  --neu-bg-alt: #dfe3e8;
+  --neu-shadow-dark: #c8cdd3;
+  --neu-shadow-light: #ffffff;
+  --neu-primary: #5b7fff;
+  --neu-primary-light: #7b9aff;
+  --neu-danger: #ff5b5b;
+  --neu-success: #4cd964;
+  --neu-text: #1a1a2e;
+  --neu-text-dim: #8e8e9a;
+  --neu-radius: 20px;
+  --neu-radius-sm: 12px;
+  --neu-transition: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Flat neumorphic surface */
+.neu-surface {
+  background: var(--neu-bg);
+  border-radius: var(--neu-radius);
+  box-shadow:
+    8px 8px 16px var(--neu-shadow-dark),
+    -8px -8px 16px var(--neu-shadow-light);
+  transition: box-shadow var(--neu-transition);
+}
+
+/* Pressed / inset variant */
+.neu-surface--pressed {
+  box-shadow:
+    inset 4px 4px 8px var(--neu-shadow-dark),
+    inset -4px -4px 8px var(--neu-shadow-light);
+}
+
+/* Convex raised element */
+.neu-convex {
+  background: linear-gradient(145deg, var(--neu-bg-alt), var(--neu-shadow-light));
+  border-radius: var(--neu-radius);
+  box-shadow:
+    5px 5px 10px var(--neu-shadow-dark),
+    -5px -5px 10px var(--neu-shadow-light);
+}
+
+/* Concave inset element */
+.neu-concave {
+  background: linear-gradient(145deg, var(--neu-shadow-dark), var(--neu-bg));
+  border-radius: var(--neu-radius);
+  box-shadow:
+    inset 3px 3px 6px var(--neu-shadow-dark),
+    inset -3px -3px 6px var(--neu-shadow-light);
+}
+
+/* Hover lift effect */
+.neu-hover:hover {
+  box-shadow:
+    12px 12px 24px var(--neu-shadow-dark),
+    -12px -12px 24px var(--neu-shadow-light);
+  transform: translateY(-2px);
+}
+
+/* Active press */
+.neu-active:active {
+  box-shadow:
+    inset 3px 3px 6px var(--neu-shadow-dark),
+    inset -3px -3px 6px var(--neu-shadow-light);
+  transform: translateY(0);
+}

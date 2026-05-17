@@ -1,0 +1,4 @@
+[submodule "OpenBB"]
+	path = OpenBB
+	url = https://github.com/OpenBB-finance/OpenBB.git
+	branch = develop

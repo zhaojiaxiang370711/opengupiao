@@ -1,0 +1,11 @@
+[package]
+name = "gupiaocli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "gupiao"
+path = "src/main.rs"
+
+[dependencies]
+ctrlc = "3"

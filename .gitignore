@@ -1,0 +1,17 @@
+# Local environment
+.env
+.venv/
+.ruff_cache/
+
+# Rust build output
+backend/target/
+gupiaocli/target/
+
+# Frontend dependencies/build output
+frontend/node_modules/
+frontend/dist/
+
+# Logs and editor noise
+*.log
+.DS_Store
+Thumbs.db
