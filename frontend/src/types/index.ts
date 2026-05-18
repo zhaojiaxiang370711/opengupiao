@@ -29,6 +29,47 @@ export interface QuotePoint {
   change_percent: number
   volume: number
   time: number
+  session?: string
+}
+
+export type TimelineMarkerKind =
+  | 'range'
+  | 'high'
+  | 'low'
+  | 'move'
+  | 'volume'
+  | 'session'
+  | 'note'
+  | 'alert'
+
+export interface TimelineMarker {
+  id: string
+  symbol: string
+  time: number
+  price: number
+  kind: TimelineMarkerKind
+  title: string
+  detail: string
+  tone: 'up' | 'down' | 'neutral' | 'info' | 'warning'
+}
+
+export interface TimelineNote {
+  id: string
+  symbol: string
+  time: number
+  price: number
+  text: string
+  created_at: number
+}
+
+export interface PriceAlert {
+  id: string
+  symbol: string
+  direction: 'above' | 'below'
+  target: number
+  enabled: boolean
+  created_at: number
+  triggered_at?: number
 }
 
 export interface WatchlistItem {

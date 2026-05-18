@@ -7,31 +7,54 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as echarts from 'echarts/core'
+import type { EChartsCoreOption } from 'echarts/core'
 import { LineChart } from 'echarts/charts'
 import {
   DataZoomComponent,
   GridComponent,
+  LegendComponent,
   TooltipComponent,
   MarkLineComponent,
   MarkPointComponent,
 } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
+import type { TimelineMarker } from '../types'
 
 echarts.use([
   LineChart,
   GridComponent,
   TooltipComponent,
   DataZoomComponent,
+  LegendComponent,
   MarkLineComponent,
   MarkPointComponent,
   CanvasRenderer,
 ])
 
-const MARKET_TZ = 'America/New_York'
+interface ChartPoint {
+  time: number
+  price: number
+}
 
-const props = defineProps<{
-  points: Array<{ time: number; price: number }>
+const MARKET_TZ = 'America/New_York'
+const UP = '#18a957'
+const DOWN = '#ff5b5b'
+const INFO = '#5b7fff'
+const WARNING = '#f5a623'
+const NEUTRAL = '#8e8e9a'
+
+const props = withDefaults(defineProps<{
+  points: ChartPoint[]
   accent?: 'up' | 'down' | 'flat'
+  markers?: TimelineMarker[]
+  selectedTime?: number
+  baselinePrice?: number
+}>(), {
+  markers: () => [],
+})
+
+const emit = defineEmits<{
+  markerSelect: [marker: TimelineMarker]
 }>()
 
 const containerRef = ref<HTMLDivElement>()
@@ -39,10 +62,18 @@ let chart: echarts.ECharts | undefined
 let resizeObserver: ResizeObserver | undefined
 
 const strokeColor = computed(() => {
-  if (props.accent === 'down') return '#ff5b5b'
-  if (props.accent === 'up') return '#18a957'
-  return '#5b7fff'
+  if (props.accent === 'down') return DOWN
+  if (props.accent === 'up') return UP
+  return INFO
 })
+
+function markerColor(marker: TimelineMarker): string {
+  if (marker.tone === 'up') return UP
+  if (marker.tone === 'down') return DOWN
+  if (marker.tone === 'warning') return WARNING
+  if (marker.tone === 'info') return INFO
+  return NEUTRAL
+}
 
 function fmtAxis(ts: number, spanMs: number): string {
   const d = new Date(ts)
@@ -54,13 +85,18 @@ function fmtAxis(ts: number, spanMs: number): string {
 
 function fmtTooltip(ts: number): string {
   return new Intl.DateTimeFormat('zh-CN', {
-    timeZone: MARKET_TZ, hour12: false,
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    timeZone: MARKET_TZ,
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
   }).format(new Date(ts))
 }
 
-function buildOption(): echarts.EChartsOption {
+function buildOption(): EChartsCoreOption {
   const pts = props.points
   if (!pts.length) return {}
 
@@ -73,8 +109,9 @@ function buildOption(): echarts.EChartsOption {
   const first = pts[0]
   const last = pts[pts.length - 1]
   const ms = Math.max(0, last.time - first.time)
-  const chg = last.price - first.price
-  const chgPct = first.price !== 0 ? (chg / first.price) * 100 : 0
+  const markers = props.markers.filter((marker) =>
+    marker.time >= first.time && marker.time <= last.time,
+  )
 
   return {
     animationDuration: 200,
@@ -84,28 +121,38 @@ function buildOption(): echarts.EChartsOption {
     grid: { left: 60, right: 64, top: 24, bottom: 64 },
     xAxis: {
       type: 'time',
-      axisLine: { show: false }, axisTick: { show: false },
+      axisLine: { show: false },
+      axisTick: { show: false },
       axisLabel: {
-        color: '#8e8e9a', fontSize: 11,
+        color: NEUTRAL,
+        fontSize: 11,
         formatter: (v: unknown) => fmtAxis(v as number, ms),
-        showMaxLabel: true, showMinLabel: true,
+        showMaxLabel: true,
+        showMinLabel: true,
       },
       splitLine: { show: false },
-      min: first.time, max: last.time,
+      min: first.time,
+      max: last.time,
     },
     yAxis: [
       {
-        type: 'value', min: yMin, max: yMax,
+        type: 'value',
+        min: yMin,
+        max: yMax,
         position: 'left',
-        axisLine: { show: false }, axisTick: { show: false },
-        axisLabel: { color: '#8e8e9a', fontSize: 11, formatter: (v: unknown) => (v as number).toFixed(2) },
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { color: NEUTRAL, fontSize: 11, formatter: (v: unknown) => (v as number).toFixed(2) },
         splitLine: { lineStyle: { color: '#e0e4e9', width: 0.5 } },
         splitNumber: 4,
       },
       {
-        type: 'value', min: yMin, max: yMax,
+        type: 'value',
+        min: yMin,
+        max: yMax,
         position: 'right',
-        axisLine: { show: false }, axisTick: { show: false },
+        axisLine: { show: false },
+        axisTick: { show: false },
         axisLabel: { show: false },
         splitLine: { show: false },
         splitNumber: 4,
@@ -120,22 +167,24 @@ function buildOption(): echarts.EChartsOption {
         const items = params as Array<{ data: number[] }>
         if (!items?.length) return ''
         const [t, price] = items[0].data
-        const chgFromFirst = first.price !== 0 ? ((price - first.price) / first.price * 100) : 0
+        const chgFromFirst = first.price !== 0 ? ((price - first.price) / first.price) * 100 : 0
         const sign = chgFromFirst >= 0 ? '+' : ''
-        const c = chgFromFirst >= 0 ? UP : DOWN
-        return `<div style="color:#8e8e9a;margin-bottom:2px">${fmtTooltip(t)}</div>
+        const color = chgFromFirst >= 0 ? UP : DOWN
+        return `<div style="color:${NEUTRAL};margin-bottom:2px">${fmtTooltip(t)}</div>
           <span style="font-weight:700;font-size:16px">$${price.toFixed(2)}</span>
-          <span style="margin-left:8px;font-weight:700;font-size:13px;color:${c}">${sign}${chgFromFirst.toFixed(2)}%</span>`
+          <span style="margin-left:8px;font-weight:700;font-size:13px;color:${color}">${sign}${chgFromFirst.toFixed(2)}%</span>`
       },
       axisPointer: {
         type: 'cross',
-        crossStyle: { color: '#8e8e9a' },
+        crossStyle: { color: NEUTRAL },
         label: { show: false },
       },
     },
     dataZoom: [
       {
-        type: 'slider', height: 22, bottom: 12,
+        type: 'slider',
+        height: 22,
+        bottom: 12,
         backgroundColor: 'rgba(200,205,211,0.30)',
         fillerColor: 'rgba(91,127,255,0.14)',
         dataBackground: {
@@ -143,8 +192,9 @@ function buildOption(): echarts.EChartsOption {
           areaStyle: { color: strokeColor.value, opacity: 0.06 },
         },
         handleStyle: { color: strokeColor.value, borderColor: strokeColor.value },
-        textStyle: { color: '#8e8e9a', fontSize: 10 },
-        moveHandleSize: 5, handleSize: '75%',
+        textStyle: { color: NEUTRAL, fontSize: 10 },
+        moveHandleSize: 5,
+        handleSize: '75%',
       },
       { type: 'inside' },
     ],
@@ -162,37 +212,80 @@ function buildOption(): echarts.EChartsOption {
           ]),
         },
         markLine: {
-          silent: true, symbol: 'none',
+          silent: true,
+          symbol: 'none',
           lineStyle: { color: strokeColor.value, type: 'dashed', width: 1, opacity: 0.7 },
           label: {
-            show: true, position: 'end', color: strokeColor.value, fontSize: 12, fontWeight: 700,
+            show: true,
+            position: 'end',
+            color: strokeColor.value,
+            fontSize: 12,
+            fontWeight: 700,
             formatter: `$ ${last.price.toFixed(2)}`,
           },
-          data: [{ yAxis: last.price }],
+          data: [
+            { yAxis: last.price },
+            ...(Number.isFinite(props.baselinePrice)
+              ? [{
+                yAxis: props.baselinePrice,
+                lineStyle: { color: NEUTRAL, type: 'dotted', opacity: 0.5 },
+                label: { show: true, formatter: '基准', color: NEUTRAL },
+              }]
+              : []),
+            ...(Number.isFinite(props.selectedTime)
+              ? [{
+                xAxis: props.selectedTime,
+                lineStyle: { color: WARNING, type: 'solid', opacity: 0.58 },
+                label: { show: false },
+              }]
+              : []),
+          ],
           animation: false,
         },
         markPoint: {
-          data: [{
-            name: '最新',
-            coord: [last.time, last.price],
-            symbol: 'circle', symbolSize: 8,
-            itemStyle: { color: strokeColor.value, borderColor: '#fff', borderWidth: 2 },
-            label: { show: false },
-          }],
+          data: [
+            {
+              name: 'latest',
+              coord: [last.time, last.price],
+              symbol: 'circle',
+              symbolSize: 8,
+              itemStyle: { color: strokeColor.value, borderColor: '#fff', borderWidth: 2 },
+              label: { show: false },
+            },
+            ...markers.map((marker) => ({
+              name: marker.id,
+              coord: [marker.time, marker.price],
+              symbol: marker.kind === 'note' ? 'pin' : 'circle',
+              symbolSize: marker.kind === 'note' ? 18 : 12,
+              itemStyle: { color: markerColor(marker), borderColor: '#fff', borderWidth: 2 },
+              label: { show: false },
+              tooltip: {
+                formatter: `<strong>${marker.title}</strong><br/>${marker.detail}`,
+              },
+            })),
+          ],
           animation: false,
         },
       },
     ],
-  } as echarts.EChartsOption
+  }
 }
 
-const UP = '#18a957'
-const DOWN = '#ff5b5b'
+function bindChartEvents() {
+  if (!chart) return
+  chart.off('click')
+  chart.on('click', (params: { componentType?: string; name?: string }) => {
+    if (params.componentType !== 'markPoint' || !params.name) return
+    const marker = props.markers.find((item) => item.id === params.name)
+    if (marker) emit('markerSelect', marker)
+  })
+}
 
 function initChart() {
   if (!containerRef.value) return
   chart = echarts.init(containerRef.value)
   chart.setOption(buildOption(), { notMerge: true })
+  bindChartEvents()
   resizeObserver = new ResizeObserver(() => chart?.resize())
   resizeObserver.observe(containerRef.value)
 }
@@ -200,10 +293,11 @@ function initChart() {
 function updateChart() {
   if (!chart) return
   chart.setOption(buildOption(), { notMerge: false, lazyUpdate: true })
+  bindChartEvents()
 }
 
 onMounted(initChart)
-watch(() => [props.points, props.accent], updateChart, { deep: true })
+watch(() => [props.points, props.accent, props.markers, props.selectedTime, props.baselinePrice], updateChart, { deep: true })
 onBeforeUnmount(() => { resizeObserver?.disconnect(); chart?.dispose() })
 </script>
 

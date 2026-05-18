@@ -7,6 +7,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as echarts from 'echarts/core'
+import type { EChartsCoreOption } from 'echarts/core'
 import { CandlestickChart, BarChart, LineChart } from 'echarts/charts'
 import {
   DataZoomComponent,
@@ -74,7 +75,7 @@ function formatDate(ts: number, full?: boolean): string {
   return new Intl.DateTimeFormat('zh-CN', opts).format(new Date(ts))
 }
 
-function buildOption(): echarts.EChartsOption {
+function buildOption(): EChartsCoreOption {
   const raw = props.data
   if (!raw.length) return {}
 
@@ -86,9 +87,6 @@ function buildOption(): echarts.EChartsOption {
   const ma10 = sma(closes, 10)
   const ma20 = sma(closes, 20)
   const last = raw[raw.length - 1]
-  const prev = raw.length >= 2 ? raw[raw.length - 2].close : last.close
-  const chg = last.close - prev
-  const chgPct = prev !== 0 ? (chg / prev) * 100 : 0
 
   return {
     animationDuration: 300,
