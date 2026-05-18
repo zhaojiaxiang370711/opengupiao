@@ -85,7 +85,7 @@
         </div>
         <span>{{ assetChartPoints.length }} 点</span>
       </div>
-      <PriceLineChart :points="assetChartPoints" :accent="assetTrend" />
+      <EChartsLine :points="assetChartPoints" :accent="assetTrend" />
       <div class="chart-note" v-if="assetChartPoints.length < 2">
         多刷新几次后会形成资产变化曲线
       </div>
@@ -96,7 +96,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import NeuCard from '../components/NeuCard.vue'
-import PriceLineChart from '../components/PriceLineChart.vue'
+import EChartsLine from '../components/EChartsLine.vue'
 import {
   convertCurrency,
   currencyName,

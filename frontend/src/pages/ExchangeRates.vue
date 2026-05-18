@@ -36,7 +36,7 @@
           {{ trendLabel }}
         </div>
       </div>
-      <PriceLineChart :points="chartPoints" :accent="trendAccent" />
+      <EChartsLine :points="chartPoints" :accent="trendAccent" />
       <div class="chart-foot">
         <span>{{ chartPoints.length }} 点</span>
         <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
@@ -49,7 +49,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import NeuCard from '../components/NeuCard.vue'
-import PriceLineChart from '../components/PriceLineChart.vue'
+import EChartsLine from '../components/EChartsLine.vue'
 import {
   defaultExchangeRates,
   fetchLatestRates,

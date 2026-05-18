@@ -99,7 +99,7 @@
           </div>
         </div>
 
-        <PriceLineChart :points="chartPoints" :accent="trendAccent" />
+        <EChartsLine :points="chartPoints" :accent="trendAccent" />
 
         <div class="chart-footer">
           <span>{{ chartPoints.length }} 点</span>
@@ -128,7 +128,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import NeuButton from '../components/NeuButton.vue'
 import NeuCard from '../components/NeuCard.vue'
-import PriceLineChart from '../components/PriceLineChart.vue'
+import EChartsLine from '../components/EChartsLine.vue'
 import { useMarketStore } from '../stores/market'
 import type { QuotePoint } from '../types'
 

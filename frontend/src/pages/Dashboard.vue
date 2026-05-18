@@ -4,7 +4,7 @@
       <div class="dashboard-status">
         <span class="status-label">首页同步</span>
         <strong>{{ isRefreshing ? '后台刷新中' : '已就绪' }}</strong>
-        <button class="refresh-button" type="button" :disabled="isRefreshing" @click="refreshQuotes">刷新</button>
+        <button class="refresh-button" type="button" :disabled="isRefreshing" @click="refreshAll">刷新</button>
       </div>
 
       <div class="clock-grid">
@@ -18,6 +18,20 @@
           <strong>{{ usClock.time }}</strong>
           <small>{{ usClock.date }} · 美东/纽约</small>
         </div>
+      </div>
+    </section>
+
+    <section class="dashboard-indices">
+      <div v-for="row in indexRows" :key="row.symbol" class="index-card neu-concave">
+        <span class="index-name">{{ row.label }}</span>
+        <strong class="index-price" :class="row.trend">
+          {{ row.quote ? row.quote.price.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '--' }}
+        </strong>
+        <span v-if="row.quote" class="index-change" :class="row.trend">
+          {{ row.quote.change >= 0 ? '+' : '' }}{{ row.quote.change.toFixed(2) }}
+          <small>({{ row.quote.change_percent >= 0 ? '+' : '' }}{{ row.quote.change_percent.toFixed(2) }}%)</small>
+        </span>
+        <span v-else class="index-change muted">同步中</span>
       </div>
     </section>
 
@@ -64,8 +78,27 @@ interface QuoteRow {
   loading: boolean
 }
 
+interface IndexDef {
+  symbol: string
+  label: string
+}
+
+interface IndexRow {
+  symbol: string
+  label: string
+  quote: Quote | undefined
+  trend: 'up' | 'down' | 'flat'
+}
+
 const store = useMarketStore()
 const defaultSymbols = ['AAPL', 'TSLA', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'INTC', 'QCOM']
+
+const indexDefs: IndexDef[] = [
+  { symbol: '^GSPC', label: '标普500' },
+  { symbol: '^DJI', label: '道琼斯' },
+  { symbol: 'QQQ', label: '纳斯达克100' },
+  { symbol: '^VIX', label: '恐慌指数' },
+]
 const now = ref(new Date())
 const loadingSymbols = ref<Set<string>>(new Set())
 let clockTimer: number | undefined
@@ -77,6 +110,17 @@ const quoteRows = computed<QuoteRow[]>(() =>
     loading: loadingSymbols.value.has(symbol),
   })),
 )
+
+const indexRows = computed<IndexRow[]>(() =>
+  indexDefs.map((def) => {
+    const quote = store.quotes.get(def.symbol)
+    let trend: 'up' | 'down' | 'flat' = 'flat'
+    if (quote && quote.change > 0) trend = 'up'
+    else if (quote && quote.change < 0) trend = 'down'
+    return { symbol: def.symbol, label: def.label, quote, trend }
+  }),
+)
+
 const isRefreshing = computed(() => loadingSymbols.value.size > 0)
 const chinaClock = computed(() => formatClock(now.value, 'Asia/Shanghai'))
 const usClock = computed(() => formatClock(now.value, 'America/New_York'))
@@ -128,7 +172,6 @@ function setSymbolLoading(symbol: string, loading: boolean) {
 
 async function refreshQuote(symbol: string) {
   setSymbolLoading(symbol, true)
-
   try {
     await store.fetchQuote(symbol)
   } catch (error) {
@@ -138,32 +181,40 @@ async function refreshQuote(symbol: string) {
   }
 }
 
+async function fetchIndices() {
+  const symbols = indexDefs.map((d) => d.symbol)
+  try {
+    await store.fetchQuotes(symbols)
+  } catch {
+    await Promise.allSettled(symbols.map((s) => store.fetchQuote(s)))
+  }
+}
+
 async function refreshQuotes() {
   if (loadingSymbols.value.size) return
-
   loadingSymbols.value = new Set(defaultSymbols)
-
   try {
     const quotes = await store.fetchQuotes(defaultSymbols)
-    const fetchedSymbols = new Set(quotes.map((quote) => quote.symbol.toUpperCase()))
-    const missingSymbols = defaultSymbols.filter((symbol) => !fetchedSymbols.has(symbol))
-
-    if (missingSymbols.length) {
-      await Promise.allSettled(missingSymbols.map((symbol) => refreshQuote(symbol)))
+    const fetchedSymbols = new Set(quotes.map((q) => q.symbol.toUpperCase()))
+    const missing = defaultSymbols.filter((s) => !fetchedSymbols.has(s))
+    if (missing.length) {
+      await Promise.allSettled(missing.map((s) => refreshQuote(s)))
     }
   } catch (error) {
     console.warn('batch quote refresh failed', error)
-    await Promise.allSettled(defaultSymbols.map((symbol) => refreshQuote(symbol)))
+    await Promise.allSettled(defaultSymbols.map((s) => refreshQuote(s)))
   } finally {
     loadingSymbols.value = new Set()
   }
 }
 
+async function refreshAll() {
+  await Promise.all([fetchIndices(), refreshQuotes()])
+}
+
 onMounted(async () => {
-  clockTimer = window.setInterval(() => {
-    now.value = new Date()
-  }, 1000)
-  void refreshQuotes()
+  clockTimer = window.setInterval(() => { now.value = new Date() }, 1000)
+  void refreshAll()
 })
 
 onBeforeUnmount(() => {
@@ -188,15 +239,14 @@ onBeforeUnmount(() => {
 }
 
 .dashboard-status,
-.clock-card {
+.clock-card,
+.index-card {
   display: flex;
   flex-direction: column;
   justify-content: center;
 }
 
-.dashboard-status {
-  gap: 8px;
-}
+.dashboard-status { gap: 8px; }
 
 .status-label,
 .clock-card span,
@@ -250,6 +300,56 @@ onBeforeUnmount(() => {
   letter-spacing: 0;
 }
 
+/* Index strip */
+.dashboard-indices {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.index-card {
+  min-height: 110px;
+  padding: 16px 18px;
+  gap: 4px;
+}
+
+.index-name {
+  color: var(--neu-text-dim);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.index-price {
+  margin: 2px 0;
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: 0;
+  color: var(--neu-text);
+}
+
+.index-price.up { color: var(--neu-success); }
+.index-price.down { color: var(--neu-danger); }
+
+.index-change {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--neu-text-dim);
+}
+
+.index-change.up { color: var(--neu-success); }
+.index-change.down { color: var(--neu-danger); }
+
+.index-change small {
+  margin-left: 6px;
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.muted {
+  color: var(--neu-text-dim) !important;
+}
+
+/* Quote cards */
 .dashboard-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -277,10 +377,6 @@ onBeforeUnmount(() => {
 .quote-price {
   font-size: 22px;
   font-weight: 700;
-}
-
-.muted {
-  color: var(--neu-text-dim) !important;
 }
 
 .quote-change {
@@ -311,9 +407,21 @@ onBeforeUnmount(() => {
   color: var(--neu-primary);
 }
 
+@media (max-width: 920px) {
+  .dashboard-indices {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 820px) {
   .dashboard-overview,
   .clock-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .dashboard-indices {
     grid-template-columns: 1fr;
   }
 }
