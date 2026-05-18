@@ -16,11 +16,54 @@ const props = defineProps<{
 const canvasRef = ref<HTMLCanvasElement>()
 let resizeObserver: ResizeObserver | undefined
 
+const MARKET_TIME_ZONE = 'America/New_York'
+
 const strokeColor = computed(() => {
   if (props.accent === 'down') return '#ff5b5b'
   if (props.accent === 'up') return '#18a957'
   return '#5b7fff'
 })
+
+function formatMarketAxisTime(time: number, spanMs: number): string {
+  const date = new Date(time)
+  const baseOptions: Intl.DateTimeFormatOptions = {
+    timeZone: MARKET_TIME_ZONE,
+    hour12: false,
+  }
+
+  if (spanMs > 7 * 24 * 60 * 60 * 1000) {
+    return new Intl.DateTimeFormat('zh-CN', {
+      ...baseOptions,
+      month: '2-digit',
+      day: '2-digit',
+    }).format(date)
+  }
+
+  if (spanMs > 24 * 60 * 60 * 1000) {
+    return new Intl.DateTimeFormat('zh-CN', {
+      ...baseOptions,
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(date)
+  }
+
+  if (spanMs <= 10 * 60 * 1000) {
+    return new Intl.DateTimeFormat('zh-CN', {
+      ...baseOptions,
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }).format(date)
+  }
+
+  return new Intl.DateTimeFormat('zh-CN', {
+    ...baseOptions,
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+}
 
 function draw() {
   const canvas = canvasRef.value
@@ -39,7 +82,7 @@ function draw() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.clearRect(0, 0, width, height)
 
-  const padding = { top: 18, right: 16, bottom: 28, left: 58 }
+  const padding = { top: 18, right: 16, bottom: 54, left: 58 }
   const plotWidth = width - padding.left - padding.right
   const plotHeight = height - padding.top - padding.bottom
 
@@ -52,6 +95,9 @@ function draw() {
   const range = max - min || Math.max(max * 0.001, 0.01)
   const lower = min - range * 0.08
   const upper = max + range * 0.08
+  const firstTime = props.points[0]?.time ?? Date.now()
+  const lastTime = props.points[props.points.length - 1]?.time ?? firstTime
+  const spanMs = Math.max(0, lastTime - firstTime)
   const scaleY = (value: number) =>
     padding.top + ((upper - value) / (upper - lower)) * plotHeight
   const scaleX = (index: number) =>
@@ -74,6 +120,38 @@ function draw() {
   }
 
   if (props.points.length < 2) return
+
+  const plotBottom = padding.top + plotHeight
+  const maxTickSteps = width < 460 ? 2 : 4
+  const tickSteps = Math.min(maxTickSteps, props.points.length - 1)
+  const tickIndices = Array.from(
+    new Set(
+      Array.from({ length: tickSteps + 1 }, (_, index) =>
+        Math.round((index / tickSteps) * (props.points.length - 1)),
+      ),
+    ),
+  )
+
+  ctx.strokeStyle = 'rgba(142, 142, 154, 0.22)'
+  ctx.fillStyle = '#8e8e9a'
+  ctx.textBaseline = 'top'
+  ctx.font = '11px Inter, system-ui, sans-serif'
+
+  tickIndices.forEach((pointIndex, tickIndex) => {
+    const x = scaleX(pointIndex)
+    const isFirst = tickIndex === 0
+    const isLast = tickIndex === tickIndices.length - 1
+    ctx.textAlign = isFirst ? 'left' : isLast ? 'right' : 'center'
+    ctx.beginPath()
+    ctx.moveTo(x, plotBottom)
+    ctx.lineTo(x, plotBottom + 5)
+    ctx.stroke()
+    ctx.fillText(formatMarketAxisTime(props.points[pointIndex].time, spanMs), x, plotBottom + 10)
+  })
+
+  ctx.textAlign = 'right'
+  ctx.fillStyle = 'rgba(142, 142, 154, 0.72)'
+  ctx.fillText('美东时间', width - padding.right, height - 15)
 
   const line = new Path2D()
   props.points.forEach((point, index) => {

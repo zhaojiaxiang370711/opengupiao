@@ -151,6 +151,7 @@ const frames: FrameOption[] = [
 ]
 
 const quickSymbols = ['AAPL', 'MSFT', 'NVDA', 'TSLA', 'GOOGL', 'AMZN', 'INTC', 'QCOM']
+const MARKET_TIME_ZONE = 'America/New_York'
 const store = useMarketStore()
 const query = ref('AAPL')
 const activeSymbol = ref('AAPL')
@@ -216,9 +217,15 @@ const rawPoints = computed(() => {
 const chartPoints = computed(() => aggregatePoints(rawPoints.value, activeFrame.value.bucketMs))
 const lastUpdated = computed(() => {
   if (!currentQuote.value) return '未同步'
-  return new Date(currentQuote.value.timestamp * 1000).toLocaleTimeString('zh-CN', {
+  const time = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: MARKET_TIME_ZONE,
     hour12: false,
-  })
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).format(new Date(currentQuote.value.timestamp * 1000))
+
+  return `美东 ${time}`
 })
 const frameWindowLabel = computed(() => {
   if (activeFrameKey.value === 'second') return '近 5 分钟'
