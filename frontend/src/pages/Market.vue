@@ -29,7 +29,16 @@
       <NeuCard class="quote-panel">
         <div class="quote-panel__head">
           <div>
-            <div class="quote-symbol">{{ activeSymbol }}</div>
+            <div class="quote-title">
+              <div class="quote-symbol">{{ activeSymbol }}</div>
+              <span
+                v-if="currentQuote"
+                class="session-badge"
+                :class="`session-badge--${sessionClass}`"
+              >
+                {{ sessionLabel }}
+              </span>
+            </div>
             <div class="quote-time">{{ lastUpdated }}</div>
           </div>
           <label class="live-toggle">
@@ -45,9 +54,28 @@
           {{ currentQuote.change >= 0 ? '+' : '' }}{{ currentQuote.change.toFixed(2) }}
           <span>{{ currentQuote.change_percent >= 0 ? '+' : '' }}{{ currentQuote.change_percent.toFixed(2) }}%</span>
         </div>
-        <div class="quote-meta">
-          <span>成交量</span>
-          <strong>{{ currentQuote ? formatVolume(currentQuote.volume) : '--' }}</strong>
+        <div class="quote-details">
+          <div class="quote-detail-row">
+            <span>成交量</span>
+            <strong>{{ currentQuote ? formatVolume(currentQuote.volume) : '--' }}</strong>
+          </div>
+          <div
+            v-for="row in sessionRows"
+            :key="row.key"
+            class="quote-detail-row"
+          >
+            <span>{{ row.label }}</span>
+            <strong>
+              {{ formatOptionalPrice(row.price) }}
+              <small v-if="isFiniteNumber(row.change_percent)" :class="row.change_percent >= 0 ? 'up' : 'down'">
+                {{ row.change_percent >= 0 ? '+' : '' }}{{ row.change_percent.toFixed(2) }}%
+              </small>
+            </strong>
+          </div>
+          <div v-if="currentQuote?.quote_source" class="quote-detail-row">
+            <span>来源</span>
+            <strong>{{ currentQuote.quote_source }}</strong>
+          </div>
         </div>
       </NeuCard>
 
@@ -84,7 +112,10 @@
     <section class="market-list" v-if="store.quotes.size">
       <div v-for="q in Array.from(store.quotes.values())" :key="q.symbol" class="market-row neu-convex">
         <span class="mr-symbol">{{ q.symbol }}</span>
-        <span class="mr-price">${{ q.price.toFixed(2) }}</span>
+        <span class="mr-price">
+          ${{ q.price.toFixed(2) }}
+          <small v-if="q.session && q.session !== 'regular'">{{ sessionLabelFor(q.session) }}</small>
+        </span>
         <span class="mr-change" :class="q.change >= 0 ? 'up' : 'down'">
           {{ q.change >= 0 ? '+' : '' }}{{ q.change_percent.toFixed(2) }}%
         </span>
@@ -143,6 +174,38 @@ const trendClass = computed(() => ({
   up: trendAccent.value === 'up',
   down: trendAccent.value === 'down',
 }))
+const sessionLabel = computed(() => sessionLabelFor(currentQuote.value?.session))
+const sessionClass = computed(() => {
+  const session = currentQuote.value?.session
+  if (session === 'pre_market') return 'pre'
+  if (session === 'post_market') return 'post'
+  return 'regular'
+})
+const sessionRows = computed(() => {
+  const quote = currentQuote.value
+  if (!quote) return []
+
+  return [
+    {
+      key: 'regular',
+      label: '常规盘',
+      price: quote.regular_price ?? (quote.session === 'regular' ? quote.price : undefined),
+      change_percent: quote.regular_change_percent,
+    },
+    {
+      key: 'pre',
+      label: '盘前',
+      price: quote.pre_market_price,
+      change_percent: quote.pre_market_change_percent,
+    },
+    {
+      key: 'post',
+      label: '盘后',
+      price: quote.post_market_price,
+      change_percent: quote.post_market_change_percent,
+    },
+  ].filter((row) => isFiniteNumber(row.price))
+})
 const rawPoints = computed(() => {
   const cutoff = Date.now() - activeFrame.value.windowMs
   return store
@@ -182,6 +245,20 @@ function formatVolume(value: number): string {
   if (value >= 1e6) return `${(value / 1e6).toFixed(1)}M`
   if (value >= 1e3) return `${(value / 1e3).toFixed(0)}K`
   return value.toString()
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function formatOptionalPrice(value: number | undefined): string {
+  return isFiniteNumber(value) ? `$${value.toFixed(2)}` : '--'
+}
+
+function sessionLabelFor(session?: string): string {
+  if (session === 'pre_market') return '盘前'
+  if (session === 'post_market') return '盘后'
+  return '常规盘'
 }
 
 async function refreshQuote() {
@@ -341,9 +418,39 @@ onBeforeUnmount(() => {
   letter-spacing: 0;
 }
 
+.quote-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.session-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  border-radius: 999px;
+  padding: 0 10px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.session-badge--regular {
+  background: var(--neu-primary);
+}
+
+.session-badge--pre {
+  background: #1f9d8a;
+}
+
+.session-badge--post {
+  background: #7b61ff;
+}
+
 .quote-time,
 .chart-panel__head p,
-.quote-meta,
+.quote-details,
 .chart-footer {
   color: var(--neu-text-dim);
   font-size: 13px;
@@ -391,15 +498,37 @@ onBeforeUnmount(() => {
   color: var(--neu-danger);
 }
 
-.quote-meta {
-  display: flex;
-  justify-content: space-between;
+.quote-details {
+  display: grid;
+  gap: 10px;
   border-top: 1px solid rgba(142, 142, 154, 0.18);
   padding-top: 16px;
 }
 
-.quote-meta strong {
+.quote-detail-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.quote-detail-row strong {
   color: var(--neu-text);
+  text-align: right;
+}
+
+.quote-detail-row small,
+.mr-price small {
+  margin-left: 6px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.quote-detail-row small.up {
+  color: var(--neu-success);
+}
+
+.quote-detail-row small.down {
+  color: var(--neu-danger);
 }
 
 .chart-panel {

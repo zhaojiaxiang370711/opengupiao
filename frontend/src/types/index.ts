@@ -5,6 +5,21 @@ export interface Quote {
   change_percent: number
   volume: number
   timestamp: number
+  session: 'regular' | 'pre_market' | 'post_market' | string
+  market_state?: string
+  quote_source?: string
+  regular_price?: number
+  regular_change?: number
+  regular_change_percent?: number
+  regular_timestamp?: number
+  pre_market_price?: number
+  pre_market_change?: number
+  pre_market_change_percent?: number
+  pre_market_timestamp?: number
+  post_market_price?: number
+  post_market_change?: number
+  post_market_change_percent?: number
+  post_market_timestamp?: number
 }
 
 export interface QuotePoint {

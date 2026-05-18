@@ -11,6 +11,35 @@ pub struct QuoteResponse {
     pub change_percent: f64,
     pub volume: f64,
     pub timestamp: i64,
+    pub session: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub market_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quote_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regular_price: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regular_change: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regular_change_percent: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regular_timestamp: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pre_market_price: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pre_market_change: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pre_market_change_percent: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pre_market_timestamp: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub post_market_price: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub post_market_change: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub post_market_change_percent: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub post_market_timestamp: Option<i64>,
 }
 
 pub fn routes() -> Router {

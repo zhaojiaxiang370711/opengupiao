@@ -56,10 +56,97 @@ fn extract_f64(item: &Bound<'_, PyAny>, keys: &[&str]) -> Option<f64> {
     None
 }
 
+fn mapping_value<'py>(item: &Bound<'py, PyAny>, key: &str) -> Option<Bound<'py, PyAny>> {
+    item.call_method1("get", (key,))
+        .ok()
+        .filter(|value| !value.is_none())
+}
+
+fn extract_mapping_string(item: &Bound<'_, PyAny>, key: &str) -> Option<String> {
+    mapping_value(item, key).and_then(|value| value.extract::<String>().ok())
+}
+
+fn extract_mapping_i64(item: &Bound<'_, PyAny>, keys: &[&str]) -> Option<i64> {
+    for key in keys {
+        let Some(value) = mapping_value(item, key) else {
+            continue;
+        };
+
+        if let Ok(value) = value.extract::<i64>() {
+            return Some(value);
+        }
+        if let Ok(value) = value.extract::<f64>() {
+            return Some(value as i64);
+        }
+    }
+    None
+}
+
+fn extract_mapping_f64(item: &Bound<'_, PyAny>, keys: &[&str]) -> Option<f64> {
+    for key in keys {
+        let Some(value) = mapping_value(item, key) else {
+            continue;
+        };
+
+        if let Ok(value) = value.extract::<f64>() {
+            return Some(value);
+        }
+        if let Ok(value) = value.extract::<i64>() {
+            return Some(value as f64);
+        }
+        if let Ok(value) = value.extract::<String>() {
+            if let Ok(value) = value.parse::<f64>() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+fn quote_response(
+    symbol: String,
+    price: f64,
+    change: f64,
+    change_percent: f64,
+    volume: f64,
+    timestamp: i64,
+) -> QuoteResponse {
+    QuoteResponse {
+        symbol,
+        price,
+        change,
+        change_percent,
+        volume,
+        timestamp,
+        session: "regular".to_string(),
+        market_state: None,
+        quote_source: None,
+        regular_price: None,
+        regular_change: None,
+        regular_change_percent: None,
+        regular_timestamp: None,
+        pre_market_price: None,
+        pre_market_change: None,
+        pre_market_change_percent: None,
+        pre_market_timestamp: None,
+        post_market_price: None,
+        post_market_change: None,
+        post_market_change_percent: None,
+        post_market_timestamp: None,
+    }
+}
+
 pub fn call_get_quote(symbol: &str) -> Result<QuoteResponse, AppError> {
     with_python(|py| {
-        if let Some(quote) = call_stooq_quote(py, symbol)? {
-            return Ok(quote);
+        match call_yfinance_quote(py, symbol) {
+            Ok(quote) => return Ok(quote),
+            Err(err) => tracing::warn!("yfinance quote failed for {symbol}: {err}"),
+        }
+
+        match call_stooq_quote(py, symbol) {
+            Ok(Some(quote)) => return Ok(quote),
+            Ok(None) => {}
+            Err(err) => tracing::warn!("stooq quote failed for {symbol}: {err}"),
         }
 
         call_openbb_quote(py, symbol)
@@ -68,16 +155,32 @@ pub fn call_get_quote(symbol: &str) -> Result<QuoteResponse, AppError> {
 
 pub fn call_get_quotes(symbols: &[String]) -> Result<Vec<QuoteResponse>, AppError> {
     with_python(|py| {
-        let mut quotes = call_stooq_quotes(py, symbols)?;
-        let mut found: HashSet<String> = quotes
-            .iter()
-            .map(|quote| quote.symbol.to_uppercase())
-            .collect();
+        let mut quotes = Vec::new();
+        let mut found = HashSet::new();
 
         for symbol in symbols {
             let normalized = symbol.trim().to_uppercase();
             if normalized.is_empty() || found.contains(&normalized) {
                 continue;
+            }
+
+            match call_yfinance_quote(py, symbol) {
+                Ok(quote) => {
+                    found.insert(quote.symbol.to_uppercase());
+                    quotes.push(quote);
+                    continue;
+                }
+                Err(err) => tracing::warn!("yfinance quote failed for {symbol}: {err}"),
+            }
+
+            match call_stooq_quote(py, symbol) {
+                Ok(Some(quote)) => {
+                    found.insert(quote.symbol.to_uppercase());
+                    quotes.push(quote);
+                    continue;
+                }
+                Ok(None) => {}
+                Err(err) => tracing::warn!("stooq quote failed for {symbol}: {err}"),
             }
 
             if let Ok(quote) = call_openbb_quote(py, symbol) {
@@ -177,8 +280,8 @@ fn parse_stooq_row(symbol: &str, headers: &[&str], values: &[&str]) -> Option<Qu
         .and_then(|value| value.parse::<f64>().ok())
         .unwrap_or(0.0);
 
-    Some(QuoteResponse {
-        symbol: field("Symbol")
+    Some(quote_response(
+        field("Symbol")
             .and_then(|value| value.split('.').next())
             .map(|value| value.to_uppercase())
             .unwrap_or_else(|| symbol.to_uppercase()),
@@ -186,7 +289,153 @@ fn parse_stooq_row(symbol: &str, headers: &[&str], values: &[&str]) -> Option<Qu
         change,
         change_percent,
         volume,
-        timestamp: chrono::Utc::now().timestamp(),
+        chrono::Utc::now().timestamp(),
+    ))
+}
+
+fn call_yfinance_quote(py: Python<'_>, symbol: &str) -> Result<QuoteResponse, AppError> {
+    let yfinance = py
+        .import("yfinance")
+        .map_err(|e| AppError::PythonBridge(e.to_string()))?;
+    let ticker = yfinance
+        .getattr("Ticker")
+        .and_then(|ticker| ticker.call1((symbol,)))
+        .map_err(|e| AppError::PythonBridge(e.to_string()))?;
+    let info = ticker
+        .call_method0("get_info")
+        .map_err(|e| AppError::PythonBridge(e.to_string()))?;
+
+    let now = chrono::Utc::now().timestamp();
+    let symbol = extract_mapping_string(&info, "symbol").unwrap_or_else(|| symbol.to_uppercase());
+    let market_state = extract_mapping_string(&info, "marketState");
+    let quote_source = extract_mapping_string(&info, "quoteSourceName");
+
+    let regular_price = extract_mapping_f64(
+        &info,
+        &["regularMarketPrice", "currentPrice", "postMarketPrice"],
+    );
+    let previous_close =
+        extract_mapping_f64(&info, &["regularMarketPreviousClose", "previousClose"]);
+    let regular_change = extract_mapping_f64(&info, &["regularMarketChange"]).or_else(|| {
+        regular_price
+            .zip(previous_close)
+            .map(|(price, previous)| price - previous)
+    });
+    let regular_change_percent = extract_mapping_f64(&info, &["regularMarketChangePercent"])
+        .or_else(|| {
+            regular_change
+                .zip(previous_close)
+                .and_then(|(change, previous)| {
+                    if previous == 0.0 {
+                        None
+                    } else {
+                        Some(change / previous * 100.0)
+                    }
+                })
+        });
+    let regular_timestamp = extract_mapping_i64(&info, &["regularMarketTime"]);
+
+    let pre_market_price = extract_mapping_f64(&info, &["preMarketPrice"]);
+    let pre_market_change = extract_mapping_f64(&info, &["preMarketChange"]).or_else(|| {
+        pre_market_price
+            .zip(regular_price)
+            .map(|(price, regular)| price - regular)
+    });
+    let pre_market_change_percent = extract_mapping_f64(&info, &["preMarketChangePercent"])
+        .or_else(|| {
+            pre_market_change
+                .zip(regular_price)
+                .and_then(|(change, regular)| {
+                    if regular == 0.0 {
+                        None
+                    } else {
+                        Some(change / regular * 100.0)
+                    }
+                })
+        });
+    let pre_market_timestamp = extract_mapping_i64(&info, &["preMarketTime"]);
+
+    let post_market_price = extract_mapping_f64(&info, &["postMarketPrice"]);
+    let post_market_change = extract_mapping_f64(&info, &["postMarketChange"]).or_else(|| {
+        post_market_price
+            .zip(regular_price)
+            .map(|(price, regular)| price - regular)
+    });
+    let post_market_change_percent = extract_mapping_f64(&info, &["postMarketChangePercent"])
+        .or_else(|| {
+            post_market_change
+                .zip(regular_price)
+                .and_then(|(change, regular)| {
+                    if regular == 0.0 {
+                        None
+                    } else {
+                        Some(change / regular * 100.0)
+                    }
+                })
+        });
+    let post_market_timestamp = extract_mapping_i64(&info, &["postMarketTime"]);
+
+    let state = market_state
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    let use_pre_market = state.contains("PRE") && pre_market_price.is_some();
+    let use_post_market = (state.contains("POST") || state == "CLOSED")
+        && post_market_price.is_some()
+        && post_market_timestamp.unwrap_or(0) >= regular_timestamp.unwrap_or(0);
+
+    let (session, price, change, change_percent, timestamp) = if use_pre_market {
+        (
+            "pre_market",
+            pre_market_price,
+            pre_market_change,
+            pre_market_change_percent,
+            pre_market_timestamp,
+        )
+    } else if use_post_market {
+        (
+            "post_market",
+            post_market_price,
+            post_market_change,
+            post_market_change_percent,
+            post_market_timestamp,
+        )
+    } else {
+        (
+            "regular",
+            regular_price,
+            regular_change,
+            regular_change_percent,
+            regular_timestamp,
+        )
+    };
+
+    let price = price
+        .or(regular_price)
+        .ok_or_else(|| AppError::PythonBridge(format!("no quote price for {symbol}")))?;
+
+    Ok(QuoteResponse {
+        symbol,
+        price,
+        change: change.unwrap_or(0.0),
+        change_percent: change_percent.unwrap_or(0.0),
+        volume: extract_mapping_f64(&info, &["regularMarketVolume", "volume"]).unwrap_or(0.0),
+        timestamp: timestamp.or(regular_timestamp).unwrap_or(now),
+        session: session.to_string(),
+        market_state,
+        quote_source,
+        regular_price,
+        regular_change,
+        regular_change_percent,
+        regular_timestamp,
+        pre_market_price,
+        pre_market_change,
+        pre_market_change_percent,
+        pre_market_timestamp,
+        post_market_price,
+        post_market_change,
+        post_market_change_percent,
+        post_market_timestamp,
     })
 }
 
@@ -214,14 +463,14 @@ fn call_openbb_quote(py: Python<'_>, symbol: &str) -> Result<QuoteResponse, AppE
         .map_err(|e| AppError::PythonBridge(e.to_string()))?;
 
     let Some(item) = result_items(&result)?.into_iter().next() else {
-        return Ok(QuoteResponse {
-            symbol: symbol.to_uppercase(),
-            price: 0.0,
-            change: 0.0,
-            change_percent: 0.0,
-            volume: 0.0,
-            timestamp: chrono::Utc::now().timestamp(),
-        });
+        return Ok(quote_response(
+            symbol.to_uppercase(),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            chrono::Utc::now().timestamp(),
+        ));
     };
 
     let price = extract_f64(&item, &["last_price", "close", "bid", "ask"]).unwrap_or(0.0);
@@ -237,14 +486,14 @@ fn call_openbb_quote(py: Python<'_>, symbol: &str) -> Result<QuoteResponse, AppE
         })
         .unwrap_or(0.0);
 
-    Ok(QuoteResponse {
-        symbol: extract_string(&item, "symbol").unwrap_or_else(|| symbol.to_uppercase()),
+    Ok(quote_response(
+        extract_string(&item, "symbol").unwrap_or_else(|| symbol.to_uppercase()),
         price,
         change,
         change_percent,
-        volume: extract_f64(&item, &["volume", "exchange_volume"]).unwrap_or(0.0),
-        timestamp: chrono::Utc::now().timestamp(),
-    })
+        extract_f64(&item, &["volume", "exchange_volume"]).unwrap_or(0.0),
+        chrono::Utc::now().timestamp(),
+    ))
 }
 
 pub fn call_search(query: &str) -> Result<Vec<String>, AppError> {

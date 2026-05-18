@@ -37,6 +37,7 @@ function quoteFromPoint(point: QuotePoint): Quote {
     change_percent: point.change_percent,
     volume: point.volume,
     timestamp: Math.floor(point.time / 1000),
+    session: 'regular',
   }
 }
 
