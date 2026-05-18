@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { PriceAlert, Quote, QuotePoint, TimelineNote } from '../types'
+import type { HistoryBar, PriceAlert, Quote, QuotePoint, TimelineNote } from '../types'
 import { useApi } from '../composables/useApi'
 
 const HISTORY_KEY = 'aaagupiao.quoteHistory.v1'
@@ -143,7 +143,7 @@ export const useMarketStore = defineStore('market', () => {
   const quoteHistory = ref<Record<string, QuotePoint[]>>(initialHistory)
   const timelineNotes = ref<Record<string, TimelineNote[]>>(loadTimelineNotes())
   const priceAlerts = ref<PriceAlert[]>(loadPriceAlerts())
-  const { getQuote, getQuotes, searchSymbols } = useApi()
+  const { getQuote, getQuotes, getHistory, searchSymbols } = useApi()
 
   function persistHistory() {
     writeJson(HISTORY_KEY, quoteHistory.value)
@@ -188,6 +188,60 @@ export const useMarketStore = defineStore('market', () => {
         .slice(-MAX_POINTS_PER_SYMBOL),
     }
     persistHistory()
+  }
+
+  function mergeHistoryPoints(symbol: string, points: QuotePoint[]) {
+    const normalized = normalizeSymbol(symbol)
+    if (!normalized || !points.length) return
+
+    const cutoff = Date.now() - MAX_HISTORY_AGE_MS
+    const byTime = new Map<number, QuotePoint>()
+    for (const point of quoteHistory.value[normalized] ?? []) {
+      if (point.time >= cutoff) byTime.set(point.time, point)
+    }
+    for (const point of points) {
+      if (point.time >= cutoff) byTime.set(point.time, point)
+    }
+
+    const merged = Array.from(byTime.values())
+      .sort((a, b) => a.time - b.time)
+      .slice(-MAX_POINTS_PER_SYMBOL)
+
+    quoteHistory.value = {
+      ...quoteHistory.value,
+      [normalized]: merged,
+    }
+    persistHistory()
+
+    const latest = merged[merged.length - 1]
+    if (latest && !quotes.value.has(normalized)) {
+      quotes.value.set(normalized, quoteFromPoint(latest))
+    }
+  }
+
+  function pointsFromBars(bars: HistoryBar[]): QuotePoint[] {
+    const sorted = [...bars].sort((a, b) => a.time - b.time)
+    return sorted
+      .filter((bar) =>
+        Number.isFinite(bar.close)
+        && bar.close > 0
+        && Number.isFinite(bar.time)
+      )
+      .map((bar, index) => {
+        const previous = sorted[index - 1]
+        const previousClose = previous?.close ?? bar.open
+        const change = bar.close - previousClose
+        const changePercent = previousClose ? (change / previousClose) * 100 : 0
+        return {
+          symbol: normalizeSymbol(bar.symbol),
+          price: bar.close,
+          change,
+          change_percent: changePercent,
+          volume: bar.volume,
+          time: bar.time * 1000,
+          session: bar.session,
+        }
+      })
   }
 
   function addTrackedSymbol(symbol: string) {
@@ -248,6 +302,16 @@ export const useMarketStore = defineStore('market', () => {
       checkQuoteAlerts(quote)
     }
     return nextQuotes
+  }
+
+  async function fetchHistory(
+    symbol: string,
+    options: { interval: string; range: string; extendedHours?: boolean },
+  ) {
+    const normalized = normalizeSymbol(symbol)
+    const bars = await getHistory(normalized, options)
+    mergeHistoryPoints(normalized, pointsFromBars(bars))
+    return bars
   }
 
   async function search(query: string) {
@@ -345,6 +409,7 @@ export const useMarketStore = defineStore('market', () => {
     priceAlerts,
     fetchQuote,
     fetchQuotes,
+    fetchHistory,
     search,
     historyFor,
     clearHistory,

@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PySequence};
 
-use crate::api::market::QuoteResponse;
+use crate::api::market::{HistoryBarResponse, QuoteResponse};
 use crate::error::AppError;
 
 fn with_python<F, R>(f: F) -> Result<R, AppError>
@@ -103,6 +103,45 @@ fn extract_mapping_f64(item: &Bound<'_, PyAny>, keys: &[&str]) -> Option<f64> {
     None
 }
 
+fn extract_mapping_timestamp(item: &Bound<'_, PyAny>, keys: &[&str]) -> Option<i64> {
+    for key in keys {
+        let Some(value) = mapping_value(item, key) else {
+            continue;
+        };
+
+        if let Ok(value) = value.extract::<i64>() {
+            return Some(normalize_timestamp(value as f64));
+        }
+        if let Ok(value) = value.extract::<f64>() {
+            return Some(normalize_timestamp(value));
+        }
+        if let Ok(timestamp) = value.call_method0("timestamp") {
+            if let Ok(value) = timestamp.extract::<f64>() {
+                return Some(value as i64);
+            }
+        }
+        if let Ok(value) = value.extract::<String>() {
+            if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(&value) {
+                return Some(parsed.timestamp());
+            }
+            if let Ok(parsed) = chrono::NaiveDate::parse_from_str(&value, "%Y-%m-%d") {
+                return parsed
+                    .and_hms_opt(0, 0, 0)
+                    .map(|dt| dt.and_utc().timestamp());
+            }
+        }
+    }
+    None
+}
+
+fn normalize_timestamp(value: f64) -> i64 {
+    if value > 1_000_000_000_000.0 {
+        (value / 1000.0) as i64
+    } else {
+        value as i64
+    }
+}
+
 fn quote_response(
     symbol: String,
     price: f64,
@@ -133,6 +172,48 @@ fn quote_response(
         post_market_change: None,
         post_market_change_percent: None,
         post_market_timestamp: None,
+    }
+}
+
+fn history_bar_response(
+    symbol: &str,
+    interval: &str,
+    time: i64,
+    open: f64,
+    high: f64,
+    low: f64,
+    close: f64,
+    volume: f64,
+) -> HistoryBarResponse {
+    HistoryBarResponse {
+        symbol: symbol.trim().to_uppercase(),
+        interval: interval.to_string(),
+        time,
+        open,
+        high,
+        low,
+        close,
+        volume,
+        session: session_for_history_time(time),
+        source: "yfinance".to_string(),
+    }
+}
+
+fn session_for_history_time(time: i64) -> String {
+    let Some(datetime) = chrono::DateTime::from_timestamp(time, 0) else {
+        return "regular".to_string();
+    };
+    let seconds = datetime.timestamp().rem_euclid(24 * 60 * 60);
+    let hour = seconds / 3600;
+    let minute = (seconds % 3600) / 60;
+    let market_minute = hour * 60 + minute;
+
+    if (13 * 60 + 30..20 * 60).contains(&market_minute) {
+        "regular".to_string()
+    } else if (8 * 60..13 * 60 + 30).contains(&market_minute) {
+        "pre_market".to_string()
+    } else {
+        "post_market".to_string()
     }
 }
 
@@ -191,6 +272,106 @@ pub fn call_get_quotes(symbols: &[String]) -> Result<Vec<QuoteResponse>, AppErro
 
         Ok(quotes)
     })
+}
+
+pub fn call_get_history(
+    symbol: &str,
+    interval: &str,
+    range: &str,
+    extended_hours: bool,
+) -> Result<Vec<HistoryBarResponse>, AppError> {
+    with_python(|py| call_yfinance_history(py, symbol, interval, range, extended_hours))
+}
+
+fn call_yfinance_history(
+    py: Python<'_>,
+    symbol: &str,
+    interval: &str,
+    range: &str,
+    extended_hours: bool,
+) -> Result<Vec<HistoryBarResponse>, AppError> {
+    let yfinance = py
+        .import("yfinance")
+        .map_err(|e| AppError::PythonBridge(e.to_string()))?;
+    let ticker = yfinance
+        .getattr("Ticker")
+        .and_then(|ticker| ticker.call1((symbol,)))
+        .map_err(|e| AppError::PythonBridge(e.to_string()))?;
+    let kwargs = PyDict::new(py);
+    kwargs
+        .set_item("period", range)
+        .map_err(|e| AppError::PythonBridge(e.to_string()))?;
+    kwargs
+        .set_item("interval", interval)
+        .map_err(|e| AppError::PythonBridge(e.to_string()))?;
+    kwargs
+        .set_item("prepost", extended_hours)
+        .map_err(|e| AppError::PythonBridge(e.to_string()))?;
+    kwargs
+        .set_item("auto_adjust", false)
+        .map_err(|e| AppError::PythonBridge(e.to_string()))?;
+    kwargs
+        .set_item("actions", false)
+        .map_err(|e| AppError::PythonBridge(e.to_string()))?;
+    kwargs
+        .set_item("timeout", 8.0)
+        .map_err(|e| AppError::PythonBridge(e.to_string()))?;
+
+    let frame = ticker
+        .call_method("history", (), Some(&kwargs))
+        .map_err(|e| AppError::PythonBridge(e.to_string()))?;
+    if frame
+        .getattr("empty")
+        .and_then(|empty| empty.extract::<bool>())
+        .unwrap_or(false)
+    {
+        return Ok(Vec::new());
+    }
+
+    let records = frame
+        .call_method0("reset_index")
+        .and_then(|frame| frame.call_method1("to_dict", ("records",)))
+        .map_err(|e| AppError::PythonBridge(e.to_string()))?;
+    let sequence = records
+        .cast::<PySequence>()
+        .map_err(|err| AppError::PythonBridge(err.to_string()))?;
+
+    let mut bars = Vec::with_capacity(sequence.len().map_err(py_err)?);
+    for idx in 0..sequence.len().map_err(py_err)? {
+        let row = sequence.get_item(idx).map_err(py_err)?;
+        let Some(time) = extract_mapping_timestamp(&row, &["Datetime", "Date", "index"]) else {
+            continue;
+        };
+        let Some(open) = extract_mapping_f64(&row, &["Open", "open"]) else {
+            continue;
+        };
+        let Some(high) = extract_mapping_f64(&row, &["High", "high"]) else {
+            continue;
+        };
+        let Some(low) = extract_mapping_f64(&row, &["Low", "low"]) else {
+            continue;
+        };
+        let Some(close) = extract_mapping_f64(&row, &["Close", "close"]) else {
+            continue;
+        };
+        if !open.is_finite() || !high.is_finite() || !low.is_finite() || !close.is_finite() {
+            continue;
+        }
+
+        bars.push(history_bar_response(
+            symbol,
+            interval,
+            time,
+            open,
+            high,
+            low,
+            close,
+            extract_mapping_f64(&row, &["Volume", "volume"]).unwrap_or(0.0),
+        ));
+    }
+
+    bars.sort_by_key(|bar| bar.time);
+    Ok(bars)
 }
 
 fn call_stooq_quote(py: Python<'_>, symbol: &str) -> Result<Option<QuoteResponse>, AppError> {

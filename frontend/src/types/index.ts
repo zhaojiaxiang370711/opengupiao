@@ -32,6 +32,19 @@ export interface QuotePoint {
   session?: string
 }
 
+export interface HistoryBar {
+  symbol: string
+  interval: string
+  time: number
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+  session: 'regular' | 'pre_market' | 'post_market' | string
+  source: string
+}
+
 export type TimelineMarkerKind =
   | 'range'
   | 'high'

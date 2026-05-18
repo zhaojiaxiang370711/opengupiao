@@ -89,6 +89,10 @@
             <span>提醒</span>
             <strong>{{ activeAlerts.length }} 个</strong>
           </div>
+          <div class="quote-detail-row">
+            <span>历史</span>
+            <strong>{{ historyStatus }}</strong>
+          </div>
           <div v-if="currentQuote?.quote_source" class="quote-detail-row">
             <span>来源</span>
             <strong>{{ currentQuote.quote_source }}</strong>
@@ -128,7 +132,8 @@
         <div class="chart-footer">
           <span>{{ chartPoints.length }} 点 · {{ filteredMarkers.length }} 个事件</span>
           <span v-if="errorMessage" class="chart-error">{{ errorMessage }}</span>
-          <span v-else>{{ isLoading ? '更新中' : '已同步' }}</span>
+          <span v-else-if="historyError" class="chart-error">{{ historyError }}</span>
+          <span v-else>{{ isLoading || isHistoryLoading ? '更新中' : '已同步' }}</span>
         </div>
 
         <div v-if="timelineStats" class="timeline-stats">
@@ -336,6 +341,11 @@ interface TimelineStats {
   points: number
 }
 
+interface HistoryRequest {
+  interval: string
+  range: string
+}
+
 const frames: FrameOption[] = [
   { key: 'second', shortLabel: '秒', label: '秒', pollMs: 1000, bucketMs: 1000, windowMs: 5 * 60 * 1000 },
   { key: 'minute', shortLabel: '分', label: '分钟', pollMs: 5000, bucketMs: 60 * 1000, windowMs: 2 * 60 * 60 * 1000 },
@@ -361,7 +371,9 @@ const activeFrameKey = ref<FrameKey>('second')
 const activeMarkerKind = ref<MarkerFilterKey>('all')
 const autoRefresh = ref(true)
 const isLoading = ref(false)
+const isHistoryLoading = ref(false)
 const errorMessage = ref('')
+const historyError = ref('')
 const noteText = ref('')
 const alertDirection = ref<PriceAlert['direction']>('above')
 const alertTarget = ref<number>()
@@ -372,6 +384,7 @@ let refreshInFlight = false
 const activeFrame = computed(() =>
   frames.find((frame) => frame.key === activeFrameKey.value) ?? frames[0],
 )
+const historyRequest = computed(() => historyRequestForFrame(activeFrameKey.value))
 const quickSymbols = computed(() => store.trackedSymbols)
 const currentQuote = computed(() => store.quotes.get(activeSymbol.value))
 const trendAccent = computed(() => {
@@ -490,6 +503,12 @@ const filteredMarkers = computed(() => {
 const markerSummary = computed(() =>
   `${frameWindowLabel.value} · ${timelineMarkers.value.length} 个时间点标记`,
 )
+const historyStatus = computed(() => {
+  if (isHistoryLoading.value) return '加载中'
+  if (historyError.value) return '失败'
+  if (!chartPoints.value.length) return '未加载'
+  return `${historyRequest.value.interval}/${historyRequest.value.range}`
+})
 const lastUpdated = computed(() => {
   if (!currentQuote.value) return '未同步'
   const time = new Intl.DateTimeFormat('zh-CN', {
@@ -521,6 +540,14 @@ function aggregatePoints(points: QuotePoint[], bucketMs: number): QuotePoint[] {
 
   const bucketed = Array.from(buckets.values()).sort((a, b) => a.time - b.time)
   return bucketed.length >= 2 ? bucketed : points.slice(-180)
+}
+
+function historyRequestForFrame(frame: FrameKey): HistoryRequest {
+  if (frame === 'second') return { interval: '1m', range: '1d' }
+  if (frame === 'minute') return { interval: '1m', range: '1d' }
+  if (frame === 'hour') return { interval: '5m', range: '5d' }
+  if (frame === 'day') return { interval: '1d', range: '1mo' }
+  return { interval: '1d', range: '6mo' }
 }
 
 function buildPriceMarkers(points: QuotePoint[]): TimelineMarker[] {
@@ -797,6 +824,22 @@ async function refreshQuote() {
   }
 }
 
+async function loadHistory() {
+  isHistoryLoading.value = true
+  historyError.value = ''
+
+  try {
+    await store.fetchHistory(activeSymbol.value, {
+      ...historyRequest.value,
+      extendedHours: true,
+    })
+  } catch (error) {
+    historyError.value = error instanceof Error ? error.message : '历史加载失败'
+  } finally {
+    isHistoryLoading.value = false
+  }
+}
+
 function restartTimer() {
   if (timerId) {
     window.clearInterval(timerId)
@@ -818,18 +861,23 @@ async function selectSymbol(symbol: string) {
   query.value = activeSymbol.value
   selectedMarker.value = undefined
   if (currentQuote.value) alertTarget.value = Number(currentQuote.value.price.toFixed(2))
-  await refreshQuote()
+  await Promise.all([loadHistory(), refreshQuote()])
   if (currentQuote.value) alertTarget.value = Number(currentQuote.value.price.toFixed(2))
   restartTimer()
 }
 
-watch([activeFrameKey, autoRefresh], restartTimer)
+watch(autoRefresh, restartTimer)
+watch(activeFrameKey, async () => {
+  selectedMarker.value = undefined
+  restartTimer()
+  await loadHistory()
+})
 watch(currentQuote, (quote) => {
   if (quote && !alertTarget.value) alertTarget.value = Number(quote.price.toFixed(2))
 })
 
 onMounted(async () => {
-  await refreshQuote()
+  await Promise.all([loadHistory(), refreshQuote()])
   if (currentQuote.value) alertTarget.value = Number(currentQuote.value.price.toFixed(2))
   restartTimer()
 })

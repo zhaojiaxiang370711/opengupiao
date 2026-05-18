@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { PortfolioHolding, Quote, WatchlistItem } from '../types'
+import type { HistoryBar, PortfolioHolding, Quote, WatchlistItem } from '../types'
 
 const api = axios.create({
   baseURL: '/api/v1',
@@ -18,6 +18,20 @@ export function useApi() {
     return data
   }
 
+  async function getHistory(
+    symbol: string,
+    options: { interval: string; range: string; extendedHours?: boolean },
+  ): Promise<HistoryBar[]> {
+    const { data } = await api.get<HistoryBar[]>(`/market/history/${encodeURIComponent(symbol)}`, {
+      params: {
+        interval: options.interval,
+        range: options.range,
+        extended_hours: options.extendedHours ?? true,
+      },
+    })
+    return data
+  }
+
   async function searchSymbols(query: string): Promise<string[]> {
     const { data } = await api.get<string[]>(`/market/search/${query}`)
     return data
@@ -33,5 +47,5 @@ export function useApi() {
     return data
   }
 
-  return { getQuote, getQuotes, searchSymbols, getWatchlist, getHoldings }
+  return { getQuote, getQuotes, getHistory, searchSymbols, getWatchlist, getHoldings }
 }

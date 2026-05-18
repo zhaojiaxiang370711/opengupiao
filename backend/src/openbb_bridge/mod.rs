@@ -3,7 +3,7 @@ mod py_embed;
 use std::sync::OnceLock;
 use tokio::sync::Mutex;
 
-use crate::api::market::QuoteResponse;
+use crate::api::market::{HistoryBarResponse, QuoteResponse};
 use crate::error::AppError;
 
 static INSTANCE: OnceLock<OpenbbBridge> = OnceLock::new();
@@ -27,6 +27,17 @@ impl OpenbbBridge {
     pub async fn get_quotes(&self, symbols: &[String]) -> Result<Vec<QuoteResponse>, AppError> {
         let _guard = self.inner.lock().await;
         py_embed::call_get_quotes(symbols)
+    }
+
+    pub async fn get_history(
+        &self,
+        symbol: &str,
+        interval: &str,
+        range: &str,
+        extended_hours: bool,
+    ) -> Result<Vec<HistoryBarResponse>, AppError> {
+        let _guard = self.inner.lock().await;
+        py_embed::call_get_history(symbol, interval, range, extended_hours)
     }
 
     pub async fn search(&self, query: &str) -> Result<Vec<String>, AppError> {
